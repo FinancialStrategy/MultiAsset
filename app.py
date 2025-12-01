@@ -9,10 +9,11 @@ from typing import Dict, List, Tuple, Any, Optional, Union
 import scipy.stats as stats
 import warnings
 import streamlit as st
+import sys
 
 warnings.filterwarnings('ignore')
 
-# Portfolio optimization imports
+# Portfolio optimization imports with better error handling
 try:
     from pypfopt import expected_returns, risk_models, EfficientFrontier
     from pypfopt import objective_functions
@@ -21,7 +22,17 @@ try:
     import cvxpy
     CVXPY_AVAILABLE = True
 except ImportError as e:
-    st.error(f"PyPortfolioOpt or cvxpy not properly installed. Please run: pip install PyPortfolioOpt cvxpy")
+    st.warning(f"""
+    ⚠️ **Optimization Libraries Not Fully Loaded**
+    
+    Some advanced optimization methods require additional packages.
+    Please install them with:
+    ```
+    pip install cvxpy ecos osqp scs
+    ```
+    
+    Error: {e}
+    """)
     CVXPY_AVAILABLE = False
 
 from scipy.optimize import minimize
@@ -52,7 +63,6 @@ class EnhancedPortfolioConfig:
                 self.ASSET_CATEGORIES[asset] = category
 
         # Benchmark - using ^GSPC (S&P 500 Index) or a regional index like XU100.IS
-        # XU100.IS is the BIST 100 index for Turkey
         self.BENCHMARK = '^GSPC' if 'US_Equities' in custom_assets else 'XU100.IS'
 
         # Dynamic date parameters
@@ -66,7 +76,15 @@ class EnhancedPortfolioConfig:
 
         # Advanced risk parameters
         self.VAR_CONFIDENCE_LEVELS = [0.90, 0.95, 0.99]
-
+        
+        # New: Covariance Model Choices
+        self.COV_MODELS = {
+            "Sample Covariance": "sample_cov",
+            "Ledoit-Wolf Shrinkage": "ledoit_wolf",
+            "Oracle Approximating Shrinkage (OAS)": "oas",
+            "Shrunk Covariance (Custom)": "shrunk_cov",
+        }
+        
         # Risk-free rate (depends on benchmark)
         self.RISK_FREE_RATE = self._get_current_risk_free_rate()
 
@@ -75,8 +93,6 @@ class EnhancedPortfolioConfig:
         try:
             # Use a high rate for a high-inflation economy like Turkey
             if self.BENCHMARK == 'XU100.IS':
-                # For Turkish market, use current policy rate or a conservative estimate
-                # You could fetch this from an API or use a fixed conservative rate
                 return 0.25  # Conservative 25% for Turkey
             
             # For USD portfolios, use 10-year Treasury yield
@@ -88,7 +104,7 @@ class EnhancedPortfolioConfig:
                 return max(0.02, min(0.08, current_yield))
         except Exception as e:
             print(f"Failed to fetch risk-free rate: {e}")
-        
+            
         # Fallback rates based on benchmark
         if self.BENCHMARK == 'XU100.IS':
             return 0.25  # Turkey fallback
@@ -96,7 +112,7 @@ class EnhancedPortfolioConfig:
             return 0.0425  # USD fallback to 4.25%
 
 # ============================================================
-# COMPREHENSIVE HISTORICAL SCENARIOS
+# COMPREHENSIVE HISTORICAL SCENARIOS (RETAINED)
 # ============================================================
 
 class ComprehensiveHistoricalScenarios:
@@ -122,7 +138,7 @@ class ComprehensiveHistoricalScenarios:
         return valid_scenarios
 
 # ============================================================
-# ADVANCED DATA MANAGER WITH REAL HISTORICAL DATA
+# ADVANCED DATA MANAGER WITH REAL HISTORICAL DATA (RETAINED/FIXED)
 # ============================================================
 
 class AdvancedDataManager:
@@ -149,7 +165,7 @@ class AdvancedDataManager:
             successful_assets = []
             asset_dataframes = []
             
-            # Set yfinance timezone
+            # Set yfinance timezone (improves date consistency)
             yf.set_tz_cache_location("America/New_York")
 
             # Download assets with progress bar
@@ -214,7 +230,7 @@ class AdvancedDataManager:
                 if len(self.asset_prices) < 50:
                     self._log(f"❌ Insufficient data points: {len(self.asset_prices)} (minimum 50 required)")
                     return False
-                
+                    
                 # Calculate returns
                 self.asset_returns = self.asset_prices.pct_change().dropna()
             else:
@@ -273,8 +289,8 @@ class AdvancedDataManager:
                 self.benchmark_returns = self.benchmark_prices.pct_change().dropna()
                 
                 self._log(f"✅ Successfully loaded benchmark {self.config.BENCHMARK}")
-                self._log(f"   Benchmark data points: {len(self.benchmark_prices)}")
-                self._log(f"   Benchmark return periods: {len(self.benchmark_returns)}")
+                self._log(f"    Benchmark data points: {len(self.benchmark_prices)}")
+                self._log(f"    Benchmark return periods: {len(self.benchmark_returns)}")
                 
                 return True
             else:
@@ -337,7 +353,7 @@ class AdvancedPortfolioOptimizer:
         if not CVXPY_AVAILABLE:
             self.log("⚠️ cvxpy not available, using simplified strategies only")
             return self._get_basic_strategies()
-        
+            
         strategies = {}
 
         optimization_methods = [
@@ -394,6 +410,8 @@ class AdvancedPortfolioOptimizer:
                         'optimization_method': name
                     }
                     self.log(f"✅ {name} completed successfully")
+                else:
+                    self.log(f"⚠️ {name} returned invalid weights")
             except Exception as e:
                 self.log(f"⚠️ {name} failed: {str(e)[:100]}...")
         
@@ -457,13 +475,15 @@ class AdvancedPortfolioOptimizer:
 
             factor_vec = factor_exposure_series.values
 
+            # pypfopt constraint requires the function to return a scalar indicating constraint violation
             def low_vol_tilt_constraint(w):
-                return w @ factor_vec >= tilt_target
+                # Constraint: w @ factor_vec >= tilt_target --> tilt_target - w @ factor_vec <= 0 (ineq)
+                return w @ factor_vec - tilt_target
 
             # Apply standard constraints
             self._apply_enhanced_constraints(ef)
-            # Apply factor tilt constraint
-            ef.add_constraint(low_vol_tilt_constraint)
+            # Apply factor tilt constraint (pypfopt assumes inequality constraints are >= 0 if type not specified)
+            ef.add_constraint(low_vol_tilt_constraint, 'ineq') 
 
             ef.max_sharpe(risk_free_rate=self.risk_free_rate)
             weights = ef.clean_weights()
@@ -830,7 +850,7 @@ class AdvancedPortfolioOptimizer:
         }
 
 # ============================================================
-# COMPREHENSIVE METRICS CALCULATOR
+# COMPREHENSIVE METRICS CALCULATOR (RETAINED/FIXED)
 # ============================================================
 
 class ComprehensiveMetricsCalculator:
@@ -865,7 +885,7 @@ class ComprehensiveMetricsCalculator:
         sortino_ratio = np.sqrt(252) * excess_returns.mean() / downside_std if downside_std > 0 else 0
 
         # Alpha and Beta
-        if not benchmark_returns.empty and len(benchmark_returns) > 0:
+        if not benchmark_returns.empty and len(benchmark_returns) > 0 and benchmark_returns.var() > 0:
             covariance = portfolio_returns.cov(benchmark_returns)
             benchmark_variance = benchmark_returns.var()
             beta = covariance / benchmark_variance if benchmark_variance > 0 else 1.0
@@ -961,7 +981,7 @@ class ComprehensiveMetricsCalculator:
         return var_metrics
 
 # ============================================================
-# ENHANCED STRESS TEST CALCULATOR
+# ENHANCED STRESS TEST CALCULATOR (RETAINED)
 # ============================================================
 
 class EnhancedStressTestCalculator:
@@ -1001,7 +1021,7 @@ class EnhancedStressTestCalculator:
                 stress_portfolio <= np.percentile(stress_portfolio, 5)
             ].mean() if len(stress_portfolio) > 5 else 0
 
-            if len(stress_portfolio) > 1 and len(stress_benchmark) > 1:
+            if len(stress_portfolio) > 1 and len(stress_benchmark) > 1 and stress_benchmark.var() > 0:
                 covariance = stress_portfolio.cov(stress_benchmark)
                 benchmark_variance = stress_benchmark.var()
                 stress_beta = covariance / benchmark_variance if benchmark_variance != 0 else 1.0
@@ -1027,7 +1047,7 @@ class EnhancedStressTestCalculator:
             return {}
 
 # ============================================================
-# ADVANCED VISUALIZATION ENGINE WITH STREAMLIT OUTPUT
+# ADVANCED VISUALIZATION ENGINE WITH STREAMLIT OUTPUT (ENHANCED)
 # ============================================================
 
 class AdvancedVisualizationEngine:
@@ -1065,7 +1085,7 @@ class AdvancedVisualizationEngine:
         ])
 
         return st.dataframe(df_styled, use_container_width=True)
-
+    
     def create_comprehensive_performance_table(
         self,
         data: Dict[str, Dict[str, float]]
@@ -1429,8 +1449,62 @@ class AdvancedVisualizationEngine:
                 use_container_width=True
             )
 
+    # -------- New: Monte Carlo Simulation Chart --------
+    def plot_monte_carlo_results(self, mc_data: Dict[str, Any]) -> go.Figure:
+        if not mc_data:
+            return go.Figure().add_annotation(text="No Monte Carlo data available", x=0.5, y=0.5, showarrow=False)
+
+        simulations = mc_data['simulations']
+        percentiles = mc_data['percentiles']
+        
+        # Calculate daily cumulative returns for plotting
+        sim_df = pd.DataFrame(simulations)
+        sim_cum_returns = sim_df.apply(lambda x: (1 + x).cumprod(), axis=0)
+
+        fig = go.Figure()
+        
+        # 1. Plot all paths (faded)
+        for col in sim_cum_returns.columns[:100]:  # Limit to 100 paths for performance
+            fig.add_trace(go.Scatter(
+                y=sim_cum_returns[col],
+                line=dict(width=0.5, color='rgba(52, 152, 219, 0.1)'), # Light Blue/Faded
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+
+        # 2. Plot key percentiles (Median, 5th, 95th)
+        median_path = sim_cum_returns.median(axis=1)
+        p5_path = sim_cum_returns.quantile(0.05, axis=1)
+        p95_path = sim_cum_returns.quantile(0.95, axis=1)
+
+        fig.add_trace(go.Scatter(
+            y=median_path, name=f'Median Return ({percentiles["median_final"]:.2%})',
+            line=dict(color=self.COLORS['performance'], width=3),
+            hovertemplate='Day: %{x}<br>Median Value: %{y:.2f}<extra></extra>'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            y=p95_path, name=f'95th Percentile ({percentiles["p95_final"]:.2%})',
+            line=dict(color=self.COLORS['positive'], width=1.5, dash='dash'),
+            hovertemplate='Day: %{x}<br>95th Value: %{y:.2f}<extra></extra>'
+        ))
+
+        fig.add_trace(go.Scatter(
+            y=p5_path, name=f'5th Percentile (Worst Case) ({percentiles["p5_final"]:.2%})',
+            line=dict(color=self.COLORS['negative'], width=1.5, dash='dash'),
+            hovertemplate='Day: %{x}<br>5th Value: %{y:.2f}<extra></extra>'
+        ))
+        
+        fig.update_layout(
+            title_text=f'🔮 Monte Carlo Simulation ({mc_data["n_sims"]} Paths over 1 Year)',
+            xaxis_title="Simulation Day (Next 252 Days)",
+            yaxis_title="Portfolio Value (Initial Value = 1.0)",
+            template="plotly_white", height=650
+        )
+        return fig
+
 # ============================================================
-# MAIN PORTFOLIO ENGINE
+# MAIN PORTFOLIO ENGINE (ENHANCED)
 # ============================================================
 
 class QFAPortfolioEngine:
@@ -1446,12 +1520,18 @@ class QFAPortfolioEngine:
         self.asset_returns = None
         self.benchmark_returns = None
         self.risk_free_rate = None
+        self.cov_model_name = "Ledoit-Wolf Shrinkage" # Default
+        self.monte_carlo_results = {}
 
         self.strategies = {}
         self.comprehensive_performance_data = {}
         self.comprehensive_risk_data = {}
         self.var_data = {}
         self.stress_test_results = {}
+
+    def set_cov_model(self, model_name: str):
+        self.cov_model_name = model_name
+        self.log_func(f"Covariance model set to: {model_name}")
 
     @staticmethod
     def _ensure_psd(S: pd.DataFrame, min_eig: float = 1e-10) -> pd.DataFrame:
@@ -1466,6 +1546,30 @@ class QFAPortfolioEngine:
         except Exception:
             return S.copy()
 
+    def _get_covariance_matrix(self, model_name: str) -> pd.DataFrame:
+        """Dynamically select and compute the covariance matrix."""
+        method = self.config.COV_MODELS.get(model_name, "ledoit_wolf")
+        
+        self.log_func(f"Calculating Covariance using {model_name}...")
+
+        if method == "sample_cov":
+            S = risk_models.sample_cov(self.asset_prices)
+        elif method == "oas":
+            # Use OAS shrinkage
+            from sklearn.covariance import OAS
+            oas = OAS()
+            returns_array = self.asset_prices.pct_change().dropna().values
+            oas.fit(returns_array)
+            S = pd.DataFrame(oas.covariance_, index=self.asset_prices.columns, columns=self.asset_prices.columns)
+        elif method == "shrunk_cov":
+            S = risk_models.CovarianceShrinkage(self.asset_prices, shrinkage=0.5).shrunk_covariance() # Custom 50% shrinkage
+        elif method == "ledoit_wolf":
+            S = risk_models.CovarianceShrinkage(self.asset_prices).ledoit_wolf()
+        else:
+            S = risk_models.CovarianceShrinkage(self.asset_prices).ledoit_wolf()
+            
+        return S
+
     def _compute_sanitized_mu_cov(self) -> Tuple[pd.Series, pd.DataFrame]:
         try:
             mu = expected_returns.mean_historical_return(self.asset_prices)
@@ -1473,8 +1577,9 @@ class QFAPortfolioEngine:
             mu = self.asset_returns.mean() * self.config.ANNUAL_TRADING_DAYS
 
         try:
-            S = risk_models.CovarianceShrinkage(self.asset_prices).ledoit_wolf()
-        except Exception:
+            S = self._get_covariance_matrix(self.cov_model_name)
+        except Exception as e:
+            self.log_func(f"Error calculating covariance: {e}. Falling back to Sample Cov.")
             S = risk_models.sample_cov(self.asset_prices)
 
         mu = mu.replace([np.inf, -np.inf], np.nan).dropna()
@@ -1498,6 +1603,78 @@ class QFAPortfolioEngine:
         self.log_func(f"Sanitized asset set for EF: {list(mu.index)}")
         return mu, S
 
+    def _run_monte_carlo_simulation(self, weights: Dict[str, float], n_sims: int = 1000, n_days: int = 252):
+        """Enhanced Monte Carlo simulation with better error handling"""
+        
+        self.log_func(f"🔮 Running Monte Carlo Simulation ({n_sims} paths)...")
+        
+        try:
+            # 1. Prepare inputs with validation
+            mu, S = self._compute_sanitized_mu_cov()
+            
+            # Filter weights to match sanitized assets
+            weights_array = np.array([weights.get(t, 0.0) for t in mu.index], dtype=float)
+            
+            # Check if weights sum to approximately 1
+            weight_sum = weights_array.sum()
+            if abs(weight_sum - 1.0) > 0.01:
+                self.log_func(f"⚠️ Weights sum to {weight_sum:.2f}, normalizing")
+                weights_array = weights_array / weight_sum
+            
+            # Annualized portfolio metrics
+            port_mu = np.dot(weights_array, mu.values)
+            port_sigma = np.sqrt(weights_array @ S.values @ weights_array)
+            
+            # Check for valid parameters
+            if port_sigma <= 1e-12:
+                self.log_func("⚠️ Portfolio sigma too low for meaningful MC simulation")
+                return
+            
+            # Daily metrics
+            daily_mu = port_mu / self.config.ANNUAL_TRADING_DAYS
+            daily_sigma = port_sigma / np.sqrt(self.config.ANNUAL_TRADING_DAYS)
+            
+            # 2. Generate simulations
+            np.random.seed(42)  # For reproducibility
+            simulations = np.random.normal(
+                daily_mu, 
+                daily_sigma, 
+                size=(n_days, n_sims)
+            )
+            
+            # 3. Calculate cumulative returns
+            cumulative_returns = np.cumprod(1 + simulations, axis=0)
+            
+            # 4. Calculate statistics
+            final_values = cumulative_returns[-1, :] - 1  # Convert to returns
+            final_percentiles = {
+                'p5_final': np.percentile(final_values, 5),
+                'median_final': np.percentile(final_values, 50),
+                'p95_final': np.percentile(final_values, 95)
+            }
+            
+            # Calculate worst/best paths
+            worst_path_idx = np.argmin(final_values)
+            best_path_idx = np.argmax(final_values)
+            
+            self.monte_carlo_results = {
+                'simulations': simulations,  # Daily returns
+                'cumulative_returns': cumulative_returns,  # Cumulative values
+                'n_sims': n_sims,
+                'n_days': n_days,
+                'percentiles': final_percentiles,
+                'worst_path': cumulative_returns[:, worst_path_idx],
+                'best_path': cumulative_returns[:, best_path_idx],
+                'expected_return': port_mu,
+                'expected_volatility': port_sigma
+            }
+            
+            self.log_func("✅ Monte Carlo Simulation Complete.")
+            
+        except Exception as e:
+            self.log_func(f"❌ Monte Carlo simulation failed: {str(e)}")
+            st.error(f"Monte Carlo simulation failed: {str(e)}")
+
     def run_analysis(self):
         self.log_func("🚀 Starting Comprehensive Portfolio Analysis...")
 
@@ -1506,6 +1683,7 @@ class QFAPortfolioEngine:
                 self.log_func("⚠️ cvxpy not available. Some optimization methods will be limited.")
                 st.warning("⚠️ cvxpy not properly installed. Some advanced optimization methods will be limited. Please ensure cvxpy is installed.")
 
+            # Validate data loading
             if not self.data_manager.load_data():
                 st.error("❌ Data loading failed. Please check asset tickers and try again.")
                 return
@@ -1536,34 +1714,52 @@ class QFAPortfolioEngine:
 
             self._calculate_comprehensive_metrics()
             self._run_enhanced_stress_tests()
+            
+            # Automatically run MC for the Max Sharpe strategy
+            optimal_strategy = self.get_optimal_strategy("sharpe")
+            if optimal_strategy and optimal_strategy in self.strategies:
+                self._run_monte_carlo_simulation(self.strategies[optimal_strategy]['weights'])
 
             self.log_func("✅ Comprehensive Portfolio Analysis Complete!")
 
+        except ValueError as e:
+            if "Insufficient valid assets" in str(e):
+                st.error("""
+                ❌ **Insufficient Data for Analysis**
+                
+                Please check:
+                1. All ticker symbols are correct
+                2. Assets have sufficient historical data
+                3. Try removing assets that might not be publicly traded
+                """)
+            else:
+                st.error(f"❌ Analysis failed: {str(e)}")
+            self.log_func(f"❌ Analysis failed: {str(e)}")
         except Exception as e:
             st.error(f"❌ Analysis failed: {str(e)}")
             self.log_func(f"❌ Analysis failed: {str(e)}")
 
     def _get_portfolio_returns(self, weights: Dict[str, float]) -> pd.Series:
+        """Calculate portfolio returns without re-normalizing weights"""
         if self.asset_returns is None or self.asset_returns.empty:
             return pd.Series(dtype=float)
-            
+        
+        # Create empty series with correct index
         portfolio_returns = pd.Series(0.0, index=self.asset_returns.index)
-        aligned_assets = [
-            a for a in weights.keys()
-            if a in self.asset_returns.columns and weights[a] > 0
+        
+        # Filter assets that exist in returns data
+        valid_assets = [
+            asset for asset in weights.keys() 
+            if asset in self.asset_returns.columns and weights[asset] > 0
         ]
-        if not aligned_assets:
+        
+        if not valid_assets:
             return pd.Series(dtype=float)
-
-        w_vals = np.array([weights[a] for a in aligned_assets], dtype=float)
-        s = w_vals.sum()
-        if s <= 0:
-            return pd.Series(dtype=float)
-        w_vals /= s
-
-        for asset, weight in zip(aligned_assets, w_vals):
-            portfolio_returns += self.asset_returns[asset] * weight
-
+        
+        # Calculate weighted returns without re-normalization
+        for asset in valid_assets:
+            portfolio_returns += self.asset_returns[asset] * weights[asset]
+        
         return portfolio_returns.dropna()
 
     def _run_enhanced_stress_tests(self):
@@ -1572,7 +1768,10 @@ class QFAPortfolioEngine:
         if not self.strategies:
             return
 
-        primary_strategy = list(self.strategies.keys())[0]
+        primary_strategy = self.get_optimal_strategy("sharpe")
+        if not primary_strategy or primary_strategy not in self.strategies:
+            primary_strategy = list(self.strategies.keys())[0] # Fallback to first one
+            
         portfolio_returns = self._get_portfolio_returns(self.strategies[primary_strategy]['weights'])
 
         if portfolio_returns.empty:
@@ -1714,12 +1913,26 @@ def run_streamlit_tab(tab_title: str, config: EnhancedPortfolioConfig):
     engine = QFAPortfolioEngine(config, update_log)
 
     st.sidebar.markdown(f"### {tab_title} Configuration")
+    
+    # NEW: Covariance Model Selection
+    cov_model_choice = st.sidebar.selectbox(
+        "Select Covariance Model (Robustness)",
+        options=list(config.COV_MODELS.keys()),
+        index=1, # Ledoit-Wolf
+        key=f'cov_model_{tab_title}'
+    )
+    engine.set_cov_model(cov_model_choice)
+    
+    st.sidebar.markdown("---")
     st.sidebar.markdown(f"**Initial Capital:** ${config.INITIAL_CAPITAL:,.0f}")
     st.sidebar.markdown(f"**Risk-Free Rate:** {config.RISK_FREE_RATE:.2%}")
     st.sidebar.markdown(f"**Benchmark:** {config.BENCHMARK}")
     st.sidebar.markdown(f"**Assets:** {len(config.ASSETS)}")
 
+
     if st.button(f"✨ Run {tab_title} Analysis", key=f"run_button_{tab_title}"):
+        # Clear previous MC results before running a new analysis
+        engine.monte_carlo_results = {}
         with st.spinner("Analyzing portfolio, please wait..."):
             engine.run_analysis()
 
@@ -1739,8 +1952,9 @@ def run_streamlit_tab(tab_title: str, config: EnhancedPortfolioConfig):
             st.info("No optimal strategy identified.")
 
         # --- Tabbed Results ---
-        tab_eff, tab_weights, tab_perf, tab_risk, tab_stress, tab_fact = st.tabs([
+        tab_eff, tab_mc, tab_weights, tab_perf, tab_risk, tab_stress, tab_fact = st.tabs([
             "Efficient Frontier",
+            "Monte Carlo Risk",
             "Asset Allocation",
             "Performance Metrics",
             "Risk Metrics (VaR/CVaR)",
@@ -1775,6 +1989,21 @@ def run_streamlit_tab(tab_title: str, config: EnhancedPortfolioConfig):
                     'Diversification Score': f"{1 - concentration:.3f}"
                 }
             st.dataframe(pd.DataFrame(strategy_data).T, use_container_width=True)
+            
+        with tab_mc:
+            st.subheader(f"🔮 1-Year Monte Carlo Simulation for {optimal_sharpe or 'Optimal'} Portfolio")
+            if engine.monte_carlo_results:
+                mc_data = engine.monte_carlo_results
+                st.markdown(f"""
+                    **Expected Terminal Return (Median):** `{mc_data['percentiles']['median_final']:.2%}`  
+                    **95% Confidence Worst Case (5th Percentile):** `{mc_data['percentiles']['p5_final']:.2%}`
+                """)
+                fig_mc = engine.visualizer.plot_monte_carlo_results(mc_data)
+                st.plotly_chart(fig_mc, use_container_width=True)
+                st.markdown("---")
+                st.caption("This simulation assumes a Normal distribution of daily portfolio returns based on the Max Sharpe portfolio's calculated historical mean and volatility.")
+            else:
+                st.info("Monte Carlo results not available. Run analysis first.")
 
         with tab_weights:
             st.subheader("📊 Portfolio Weight Allocation by Strategy")
@@ -1825,7 +2054,7 @@ def run_streamlit_tab(tab_title: str, config: EnhancedPortfolioConfig):
 
 def main_app():
     st.set_page_config(
-        layout="wide", 
+        layout="wide",
         page_title="QFA Institutional Portfolio Optimization",
         page_icon="🏆"
     )
@@ -1835,17 +2064,12 @@ def main_app():
     st.markdown("---")
     
     # Check for cvxpy installation
+    global CVXPY_AVAILABLE
     if not CVXPY_AVAILABLE:
         st.warning("""
-        ⚠️ **cvxpy is not properly installed!**
+        ⚠️ **cvxpy is not fully loaded!**
         
-        Some advanced optimization methods will be limited. For full functionality, please ensure cvxpy is installed:
-        
-        ```bash
-        pip install cvxpy
-        ```
-        
-        On Streamlit Cloud, add `cvxpy` to your `requirements.txt` file.
+        Some advanced optimization methods will be limited. Please ensure `cvxpy` and its dependencies (`ecos`) are installed.
         """)
 
     # --- Global Configuration Sidebar ---
@@ -1890,7 +2114,7 @@ def main_app():
     with tab_try:
         try_config = EnhancedPortfolioConfig(try_capital, get_turkish_equities())
         run_streamlit_tab("Turkish Equities Mandate (TRY)", try_config)
-    
+        
     # Footer
     st.markdown("---")
     st.markdown("""
