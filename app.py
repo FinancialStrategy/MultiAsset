@@ -1555,12 +1555,19 @@ class QFAPortfolioEngine:
         if method == "sample_cov":
             S = risk_models.sample_cov(self.asset_prices)
         elif method == "oas":
-            # Use OAS shrinkage
-            from sklearn.covariance import OAS
-            oas = OAS()
-            returns_array = self.asset_prices.pct_change().dropna().values
-            oas.fit(returns_array)
-            S = pd.DataFrame(oas.covariance_, index=self.asset_prices.columns, columns=self.asset_prices.columns)
+            try:
+                # Try to use scikit-learn's OAS
+                from sklearn.covariance import OAS
+                oas = OAS()
+                returns_array = self.asset_prices.pct_change().dropna().values
+                oas.fit(returns_array)
+                S = pd.DataFrame(oas.covariance_, 
+                                index=self.asset_prices.columns, 
+                                columns=self.asset_prices.columns)
+            except ImportError:
+                # Fallback to Ledoit-Wolf if scikit-learn not available
+                self.log_func("⚠️ scikit-learn not available, using Ledoit-Wolf instead of OAS")
+                S = risk_models.CovarianceShrinkage(self.asset_prices).ledoit_wolf()
         elif method == "shrunk_cov":
             S = risk_models.CovarianceShrinkage(self.asset_prices, shrinkage=0.5).shrunk_covariance() # Custom 50% shrinkage
         elif method == "ledoit_wolf":
